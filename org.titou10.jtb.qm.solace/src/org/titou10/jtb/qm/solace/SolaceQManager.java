@@ -23,8 +23,11 @@ import java.net.http.HttpResponse;
 import java.net.http.HttpResponse.BodyHandlers;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Hashtable;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.SortedMap;
 import java.util.SortedSet;
 import java.util.TreeMap;
@@ -32,8 +35,15 @@ import java.util.TreeSet;
 
 import javax.jms.Connection;
 import javax.jms.JMSException;
+import javax.jms.Queue;
+import javax.jms.Topic;
 import javax.json.bind.Jsonb;
 import javax.json.bind.JsonbBuilder;
+import javax.naming.Context;
+import javax.naming.InitialContext;
+import javax.naming.NameClassPair;
+import javax.naming.NamingEnumeration;
+import javax.naming.NamingException;
 
 import org.slf4j.LoggerFactory;
 import org.titou10.jtb.config.gen.SessionDef;
@@ -51,6 +61,7 @@ import org.titou10.jtb.qm.solace.utils.PType;
 
 import com.solacesystems.jms.SolConnectionFactory;
 import com.solacesystems.jms.SolJmsUtility;
+import com.solacesystems.jms.SupportedProperty;
 
 /**
  * 
@@ -62,51 +73,54 @@ import com.solacesystems.jms.SolJmsUtility;
  */
 public class SolaceQManager extends QManager {
 
-   private static final org.slf4j.Logger   log                           = LoggerFactory.getLogger(SolaceQManager.class);
+   private static final org.slf4j.Logger   log                            = LoggerFactory.getLogger(SolaceQManager.class);
 
-   private static final String             CR                            = "\n";
+   private static final String             CR                             = "\n";
    private static final String             HELP_TEXT;
 
+   private static final String             SOLJMS_INITIAL_CONTEXT_FACTORY = "com.solacesystems.jndi.SolJNDIInitialContextFactory";
+
    // HTTP REST stuff
-   private static final HttpClient         HTTP_CLIENT                   = HttpClient.newBuilder()
+   private static final HttpClient         HTTP_CLIENT                    = HttpClient.newBuilder()
             .followRedirects(HttpClient.Redirect.NORMAL).build();
 
    // JSON-B stuff
-   private static final Jsonb              JSONB                         = JsonbBuilder.create();
-   private static final PType              JSONB_Q_DATA_RESP             = new PType(SempResponse.class, SempQueueData.class);
-   private static final PType              JSONB_Q_DATA_LIST             = new PType(List.class, SempQueueData.class);
-   private static final PType              JSONB_Q_DATA_LIST_RESP        = new PType(SempResponse.class, JSONB_Q_DATA_LIST);
+   private static final Jsonb              JSONB                          = JsonbBuilder.create();
+   private static final PType              JSONB_Q_DATA_RESP              = new PType(SempResponse.class, SempQueueData.class);
+   private static final PType              JSONB_Q_DATA_LIST              = new PType(List.class, SempQueueData.class);
+   private static final PType              JSONB_Q_DATA_LIST_RESP         = new PType(SempResponse.class, JSONB_Q_DATA_LIST);
 
-   private static final PType              JSONB_JNDI_T_DATA_LIST        = new PType(List.class, SempJndiTopicData.class);
-   private static final PType              JSONB_JNDI_T_DATA_LIST_RESP   = new PType(SempResponse.class, JSONB_JNDI_T_DATA_LIST);
+   private static final PType              JSONB_JNDI_T_DATA_LIST         = new PType(List.class, SempJndiTopicData.class);
+   private static final PType              JSONB_JNDI_T_DATA_LIST_RESP    = new PType(SempResponse.class, JSONB_JNDI_T_DATA_LIST);
 
    // Properties
-   private List<QManagerProperty>          parameters                    = new ArrayList<QManagerProperty>();
+   private List<QManagerProperty>          parameters                     = new ArrayList<QManagerProperty>();
 
-   private static final String             MESSAGE_VPN                   = "VPN";
-   private static final String             MGMT_URL                      = "mgmt_url";
-   private static final String             MGMT_USERNAME                 = "mgmt_username";
-   private static final String             MGMT_PASSWORD                 = "mgmt_password";
-   private static final String             BROWSER_TIMEOUT               = "browser_timeout";
+   private static final String             MESSAGE_VPN                    = "VPN";
+   private static final String             MGMT_URL                       = "mgmt_url";
+   private static final String             MGMT_USERNAME                  = "mgmt_username";
+   private static final String             MGMT_PASSWORD                  = "mgmt_password";
+   private static final String             BROWSER_TIMEOUT                = "browser_timeout";
 
-   private static final String             SSL_CIPHER_SUITE              = "ssl_cipher_suite";
-   private static final String             SSL_CONNECTION_DOWNGRADE_TO   = "ssl_connection_downgrade_to";
-   private static final String             SSL_EXCLUDED_PROTOCOLS        = "ssl_excluded_protocols";
-   private static final String             SSL_KEY_STORE                 = "ssl_key_store";
-   private static final String             SSL_KEY_STORE_FORMAT          = "ssl_key_store_format";
-   private static final String             SSL_KEY_STORE_PASSWORD        = "ssl_key_store_password";
-   private static final String             SSL_PRIVATE_KEY_ALIAS         = "ssl_private_key_alias";
-   private static final String             SSL_PRIVATE_KEY_PASSWORD      = "ssl_private_key_password";
-   private static final String             SSL_PROTOCOL                  = "ssl_protocol";
-   private static final String             SSL_TRUST_STORE               = "ssl_trust_store";
-   private static final String             SSL_TRUST_STORE_FORMAT        = "ssl_trust_store_format";
-   private static final String             SSL_TRUST_STORE_PASSWORD      = "ssl_trust_store_password";
-   private static final String             SSL_TRUSTED_COMMON_NAME_LIST  = "ssl_trusted_common_name_list";
-   private static final String             SSL_VALIDATE_CERTIFICATE      = "ssl_validate_certificate";
-   private static final String             SSL_VALIDATE_CERTIFICATE_DATE = "ssl_validate_certificate_date";
+   private static final String             SSL_CIPHER_SUITE               = "ssl_cipher_suite";
+   private static final String             SSL_CONNECTION_DOWNGRADE_TO    = "ssl_connection_downgrade_to";
+   private static final String             SSL_EXCLUDED_PROTOCOLS         = "ssl_excluded_protocols";
+   private static final String             SSL_KEY_STORE                  = "ssl_key_store";
+   private static final String             SSL_KEY_STORE_FORMAT           = "ssl_key_store_format";
+   private static final String             SSL_KEY_STORE_PASSWORD         = "ssl_key_store_password";
+   private static final String             SSL_PRIVATE_KEY_ALIAS          = "ssl_private_key_alias";
+   private static final String             SSL_PRIVATE_KEY_PASSWORD       = "ssl_private_key_password";
+   private static final String             SSL_PROTOCOL                   = "ssl_protocol";
+   private static final String             SSL_TRUST_STORE                = "ssl_trust_store";
+   private static final String             SSL_TRUST_STORE_FORMAT         = "ssl_trust_store_format";
+   private static final String             SSL_TRUST_STORE_PASSWORD       = "ssl_trust_store_password";
+   private static final String             SSL_TRUSTED_COMMON_NAME_LIST   = "ssl_trusted_common_name_list";
+   private static final String             SSL_VALIDATE_CERTIFICATE       = "ssl_validate_certificate";
+   private static final String             SSL_VALIDATE_CERTIFICATE_DATE  = "ssl_validate_certificate_date";
 
    // Operations
-   private final Map<Integer, SEMPContext> sempContexts                  = new HashMap<>();
+   private final Map<Integer, SEMPContext> sempContexts                   = new HashMap<>();
+   private final Map<Integer, Context>     jndiContexts                   = new HashMap<>();
 
    public SolaceQManager() {
       log.debug("Instantiate Solace");
@@ -296,6 +310,15 @@ public class SolaceQManager extends QManager {
       Integer hash = jmsConnection.hashCode();
       sempContexts.put(hash, new SEMPContext(vpn, mgmtUrl, mgmtUsername, mgmtPassword));
 
+      // JNDI
+      String brokerUrl = sessionDef.getHost() + ":" + sessionDef.getPort();
+      Context jndiCtx = getJndiContext(brokerUrl,
+                                       sessionDef.getActiveUserid(),
+                                       sessionDef.getActivePassword(),
+                                       vpn,
+                                       browserTimeout);
+      jndiContexts.put(hash, jndiCtx);
+
       return jmsConnection;
    }
 
@@ -365,6 +388,13 @@ public class SolaceQManager extends QManager {
          listTopicData.add(new TopicData(sempJndiTopicData.physicalName));
       }
 
+      // JNDI Browsing (Not used for now...)
+      Context ctx = jndiContexts.get(hash);
+      SortedSet<QueueData> listQueueDataJNDI = new TreeSet<>();
+      SortedSet<TopicData> listTopicDataJNDI = new TreeSet<>();
+      listContext(null, ctx, new HashSet<String>(), listQueueDataJNDI, listTopicDataJNDI);
+      // JNDI Browsing end
+
       return new DestinationData(listQueueData, listTopicData);
    }
 
@@ -430,6 +460,84 @@ public class SolaceQManager extends QManager {
       properties.put("topicName", sempContext.getJndiTopicData(topicName).topicName);
 
       return properties;
+   }
+
+   // ------------
+   // JNDI Helpers
+   // ------------
+   private InitialContext getJndiContext(String brokerUrl,
+                                         String username,
+                                         String password,
+                                         String msgVpn,
+                                         int browserTimeout) throws NamingException {
+      Hashtable<String, Object> env = new Hashtable<>();
+      env.put(InitialContext.INITIAL_CONTEXT_FACTORY, SOLJMS_INITIAL_CONTEXT_FACTORY);
+      env.put(InitialContext.PROVIDER_URL, brokerUrl);
+      env.put(Context.SECURITY_PRINCIPAL, username);
+      env.put(Context.SECURITY_CREDENTIALS, password);
+      env.put(SupportedProperty.SOLACE_JMS_VPN, msgVpn);
+      env.put(SupportedProperty.SOLACE_JMS_SSL_VALIDATE_CERTIFICATE, false);
+      env.put(SupportedProperty.SOLACE_JMS_BROWSER_TIMEOUT_IN_MS, browserTimeout);
+      return new InitialContext(env);
+   }
+
+   private void listContext(String path,
+                            Context ctx,
+                            Set<String> visited,
+                            SortedSet<QueueData> q,
+                            SortedSet<TopicData> t) throws NamingException {
+
+      // FIXME: throws javax.naming.OperationNotSupportedException: getNameInNamespace is not supported
+      log.trace("now scanning nameInNamespace '{}'", ctx.getNameInNamespace());
+
+      if (visited.contains(ctx.getNameInNamespace())) {
+         return;
+      }
+
+      visited.add(ctx.getNameInNamespace());
+
+      // FIXME: throws javax.naming.OperationNotSupportedException: list is not supported
+      NamingEnumeration<NameClassPair> list = ctx.list("");
+      while (list.hasMore()) {
+         NameClassPair item = (NameClassPair) list.next();
+         String className = item.getClassName();
+         String name = item.getName();
+         String fn = ctx.getNameInNamespace() + "/" + name;
+         log.debug("   {} name={} {}", item.toString(), fn, className);
+
+         String ctxPath;
+         if (path == null) {
+            ctxPath = item.getName();
+         } else {
+            ctxPath = path + "/" + item.getName();
+         }
+
+         // if (BYPASS_CLASS_NAMES.indexOf(className) != -1) {
+         // log.debug(" bypass");
+         // continue;
+         // }
+         Object o;
+         try {
+            o = ctx.lookup(name);
+            // String o = item.getNameInNamespace();
+            if (o instanceof Context) {
+               listContext(ctxPath, (Context) o, visited, q, t);
+            }
+            if (o instanceof Queue) {
+               log.debug("   It's a Queue");
+               Queue oq = (Queue) o;
+               q.add(new QueueData(oq.getQueueName()));
+            }
+            if (o instanceof Topic) {
+               log.debug("   It's a Topic");
+               Topic ot = (Topic) o;
+               t.add(new TopicData(ot.getTopicName()));
+            }
+         } catch (Throwable e) {
+            log.debug("   !!! Exception when processing class '{}' : {}", className, e.getMessage());
+            continue;
+         }
+      }
    }
 
    // -------
